@@ -1,6 +1,11 @@
-from .audio_configuration import Audio, AudioConfiguration
+from .application import (
+	ApplicationConfiguration,
+	Audio,
+	AudioConfiguration,
+	BluetoothConfiguration,
+)
 from .bootloader import Bootloader
-from .device_model import (
+from .device import (
 	BDevice,
 	DeviceGeometry,
 	DeviceModification,
@@ -29,15 +34,17 @@ from .device_model import (
 )
 from .locale import LocaleConfiguration
 from .mirrors import CustomRepository, MirrorConfiguration, MirrorRegion
-from .network_configuration import NetworkConfiguration, Nic, NicType
+from .network import NetworkConfiguration, Nic, NicType
 from .packages import LocalPackage, PackageSearch, PackageSearchResult, Repository
-from .profile_model import ProfileConfiguration
+from .profile import ProfileConfiguration
 from .users import PasswordStrength, User
 
 __all__ = [
+	'ApplicationConfiguration',
 	'Audio',
 	'AudioConfiguration',
 	'BDevice',
+	'BluetoothConfiguration',
 	'Bootloader',
 	'CustomRepository',
 	'DeviceGeometry',

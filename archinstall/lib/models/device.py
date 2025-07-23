@@ -19,6 +19,7 @@ from ..models.users import Password
 from ..output import debug
 
 ENC_IDENTIFIER = 'ainst'
+DEFAULT_ITER_TIME = 10000
 
 
 class DiskLayoutType(Enum):
@@ -84,7 +85,6 @@ class DiskLayoutConfiguration:
 		cls,
 		disk_config: _DiskLayoutConfigurationSerialization,
 		enc_password: Password | None = None,
-		disk_encryption: _DiskEncryptionSerialization | None = None,
 	) -> DiskLayoutConfiguration | None:
 		from archinstall.lib.disk.device_handler import device_handler
 
@@ -890,7 +890,7 @@ class PartitionModification:
 	def __post_init__(self) -> None:
 		# needed to use the object as a dictionary key due to hash func
 		if not hasattr(self, '_obj_id'):
-			self._obj_id: uuid.UUID | str = uuid.uuid4()
+			self._obj_id = uuid.uuid4()
 
 		if self.is_exists_or_modify() and not self.dev_path:
 			raise ValueError('If partition marked as existing a path must be set')
@@ -1010,6 +1010,10 @@ class PartitionModification:
 
 	@property
 	def mapper_name(self) -> str | None:
+		if self.is_root():
+			return 'root'
+		if self.is_home():
+			return 'home'
 		if self.dev_path:
 			return f'{ENC_IDENTIFIER}{self.dev_path.name}'
 		return None
@@ -1155,7 +1159,7 @@ class LvmVolume:
 	def __post_init__(self) -> None:
 		# needed to use the object as a dictionary key due to hash func
 		if not hasattr(self, '_obj_id'):
-			self._obj_id: uuid.UUID | str = uuid.uuid4()
+			self._obj_id = uuid.uuid4()
 
 	@override
 	def __hash__(self) -> int:
@@ -1367,7 +1371,7 @@ class SnapshotConfig:
 		return {'type': self.snapshot_type.value}
 
 	@staticmethod
-	def parse_args(args: _SnapshotConfigSerialization) -> SnapshotConfig | None:
+	def parse_args(args: _SnapshotConfigSerialization) -> SnapshotConfig:
 		return SnapshotConfig(SnapshotType(args['type']))
 
 
@@ -1468,6 +1472,7 @@ class _DiskEncryptionSerialization(TypedDict):
 	partitions: list[str]
 	lvm_volumes: list[str]
 	hsm_device: NotRequired[_Fido2DeviceSerialization]
+	iter_time: NotRequired[int]
 
 
 @dataclass
@@ -1477,6 +1482,7 @@ class DiskEncryption:
 	partitions: list[PartitionModification] = field(default_factory=list)
 	lvm_volumes: list[LvmVolume] = field(default_factory=list)
 	hsm_device: Fido2Device | None = None
+	iter_time: int = DEFAULT_ITER_TIME
 
 	def __post_init__(self) -> None:
 		if self.encryption_type in [EncryptionType.Luks, EncryptionType.LvmOnLuks] and not self.partitions:
@@ -1488,9 +1494,8 @@ class DiskEncryption:
 	def should_generate_encryption_file(self, dev: PartitionModification | LvmVolume) -> bool:
 		if isinstance(dev, PartitionModification):
 			return dev in self.partitions and dev.mountpoint != Path('/')
-		elif isinstance(dev, LvmVolume):
+		else:
 			return dev in self.lvm_volumes and dev.mountpoint != Path('/')
-		return False
 
 	def json(self) -> _DiskEncryptionSerialization:
 		obj: _DiskEncryptionSerialization = {
@@ -1501,6 +1506,9 @@ class DiskEncryption:
 
 		if self.hsm_device:
 			obj['hsm_device'] = self.hsm_device.json()
+
+		if self.iter_time != DEFAULT_ITER_TIME:  # Only include if not default
+			obj['iter_time'] = self.iter_time
 
 		return obj
 
@@ -1556,6 +1564,9 @@ class DiskEncryption:
 
 		if hsm := disk_encryption.get('hsm_device', None):
 			enc.hsm_device = Fido2Device.parse_arg(hsm)
+
+		if iter_time := disk_encryption.get('iter_time', None):
+			enc.iter_time = iter_time
 
 		return enc
 
@@ -1613,7 +1624,7 @@ class LsblkInfo(BaseModel):
 	fsver: str | None
 	fsavail: int | None
 	fsuse_percentage: str | None = Field(alias='fsuse%')
-	type: str
+	type: str | None  # may be None for strange behavior with md devices
 	mountpoint: Path | None
 	mountpoints: list[Path]
 	fsroots: list[Path]

@@ -4,8 +4,10 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CalledProcessError
+from types import TracebackType
 
 from archinstall.lib.disk.utils import get_lsblk_info, umount
+from archinstall.lib.models.device import DEFAULT_ITER_TIME
 
 from .exceptions import DiskError, SysCallError
 from .general import SysCommand, SysCommandWorker, generate_password, run
@@ -47,7 +49,7 @@ class Luks2:
 	def __enter__(self) -> None:
 		self.unlock(self.key_file)
 
-	def __exit__(self, *args: str, **kwargs: str) -> None:
+	def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
 		if self.auto_unmount:
 			self.lock()
 
@@ -75,7 +77,7 @@ class Luks2:
 		self,
 		key_size: int = 512,
 		hash_type: str = 'sha512',
-		iter_time: int = 10000,
+		iter_time: int = DEFAULT_ITER_TIME,
 		key_file: Path | None = None,
 	) -> Path | None:
 		debug(f'Luks2 encrypting: {self.luks_dev_path}')
@@ -126,7 +128,7 @@ class Luks2:
 			raise err
 
 	def is_unlocked(self) -> bool:
-		return self.mapper_name is not None and Path(f'/dev/mapper/{self.mapper_name}').exists()
+		return (mapper_dev := self.mapper_dev) is not None and mapper_dev.is_symlink()
 
 	def unlock(self, key_file: Path | None = None) -> None:
 		"""
@@ -157,7 +159,7 @@ class Luks2:
 
 		debug(f'cryptsetup open output: {result.stdout.decode().rstrip()}')
 
-		if not self.mapper_dev or not self.mapper_dev.is_symlink():
+		if not self.is_unlocked():
 			raise DiskError(f'Failed to open luks2 device: {self.luks_dev_path}')
 
 	def lock(self) -> None:

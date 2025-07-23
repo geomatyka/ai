@@ -3,39 +3,38 @@ from __future__ import annotations
 from typing import override
 
 from archinstall.lib.disk.disk_menu import DiskLayoutConfigurationMenu
-from archinstall.lib.models.device_model import DiskLayoutConfiguration, DiskLayoutType, EncryptionType, FilesystemType, PartitionModification
+from archinstall.lib.models.application import ApplicationConfiguration
+from archinstall.lib.models.authentication import AuthenticationConfiguration
+from archinstall.lib.models.device import DiskLayoutConfiguration, DiskLayoutType, EncryptionType, FilesystemType, PartitionModification
 from archinstall.lib.packages import list_available_packages
 from archinstall.tui.menu_item import MenuItem, MenuItemGroup
 
+from .applications.application_menu import ApplicationMenu
 from .args import ArchConfig
+from .authentication.authentication_menu import AuthenticationMenu
 from .configuration import save_config
 from .hardware import SysInfo
 from .interactions.general_conf import (
 	add_number_of_parallel_downloads,
 	ask_additional_packages_to_install,
 	ask_for_a_timezone,
-	ask_for_audio_selection,
 	ask_hostname,
 	ask_ntp,
 )
-from .interactions.manage_users_conf import ask_for_additional_users
 from .interactions.network_menu import ask_to_configure_network
 from .interactions.system_conf import ask_for_bootloader, ask_for_swap, ask_for_uki, select_kernel
 from .locale.locale_menu import LocaleMenu
 from .menu.abstract_menu import CONFIG_KEY, AbstractMenu
 from .mirrors import MirrorMenu
-from .models.audio_configuration import AudioConfiguration
 from .models.bootloader import Bootloader
 from .models.locale import LocaleConfiguration
 from .models.mirrors import MirrorConfiguration
-from .models.network_configuration import NetworkConfiguration, NicType
+from .models.network import NetworkConfiguration, NicType
 from .models.packages import Repository
-from .models.profile_model import ProfileConfiguration
-from .models.users import Password, User
+from .models.profile import ProfileConfiguration
 from .output import FormattedOutput
 from .pacman.config import PacmanConfig
 from .translationhandler import Language, tr, translation_handler
-from .utils.util import get_password
 
 
 class GlobalMenu(AbstractMenu[None]):
@@ -52,7 +51,7 @@ class GlobalMenu(AbstractMenu[None]):
 		super().__init__(self._item_group, config=arch_config)
 
 	def _get_menu_options(self) -> list[MenuItem]:
-		return [
+		menu_options = [
 			MenuItem(
 				text=tr('Archinstall language'),
 				action=self._select_archinstall_language,
@@ -109,16 +108,10 @@ class GlobalMenu(AbstractMenu[None]):
 				key='hostname',
 			),
 			MenuItem(
-				text=tr('Root password'),
-				action=self._set_root_password,
-				preview_action=self._prev_root_pwd,
-				key='root_enc_password',
-			),
-			MenuItem(
-				text=tr('User account'),
-				action=self._create_user_account,
-				preview_action=self._prev_users,
-				key='users',
+				text=tr('Authentication'),
+				action=self._select_authentication,
+				preview_action=self._prev_authentication,
+				key='auth_config',
 			),
 			MenuItem(
 				text=tr('Profile'),
@@ -127,10 +120,11 @@ class GlobalMenu(AbstractMenu[None]):
 				key='profile_config',
 			),
 			MenuItem(
-				text=tr('Audio'),
-				action=ask_for_audio_selection,
-				preview_action=self._prev_audio,
-				key='audio_config',
+				text=tr('Applications'),
+				action=self._select_applications,
+				value=[],
+				preview_action=self._prev_applications,
+				key='app_config',
 			),
 			MenuItem(
 				text=tr('Kernels'),
@@ -195,6 +189,8 @@ class GlobalMenu(AbstractMenu[None]):
 			),
 		]
 
+		return menu_options
+
 	def _safe_config(self) -> None:
 		# data: dict[str, Any] = {}
 		# for item in self._item_group.items:
@@ -205,28 +201,28 @@ class GlobalMenu(AbstractMenu[None]):
 		save_config(self._arch_config)
 
 	def _missing_configs(self) -> list[str]:
-		def check(s) -> bool:
+		item: MenuItem = self._item_group.find_by_key('auth_config')
+		auth_config: AuthenticationConfiguration | None = item.value
+
+		def check(s: str) -> bool:
 			item = self._item_group.find_by_key(s)
 			return item.has_value()
 
 		def has_superuser() -> bool:
-			item = self._item_group.find_by_key('users')
-
-			if item.has_value():
-				users = item.value
-				if users:
-					return any([u.sudo for u in users])
+			if auth_config and auth_config.users:
+				return any([u.sudo for u in auth_config.users])
 			return False
 
 		missing = set()
 
+		if (auth_config is None or auth_config.root_enc_password is None) and not has_superuser():
+			missing.add(
+				tr('Either root-password or at least 1 user with sudo privileges must be specified'),
+			)
+
 		for item in self._item_group.items:
-			if item.key in ['root_enc_password', 'users']:
-				if not check('root_enc_password') and not has_superuser():
-					missing.add(
-						tr('Either root-password or at least 1 user with sudo privileges must be specified'),
-					)
-			elif item.mandatory:
+			if item.mandatory:
+				assert item.key is not None
 				if not check(item.key):
 					missing.add(item.text)
 
@@ -250,6 +246,14 @@ class GlobalMenu(AbstractMenu[None]):
 		self._update_lang_text()
 
 		return language
+
+	def _select_applications(self, preset: ApplicationConfiguration | None) -> ApplicationConfiguration | None:
+		app_config = ApplicationMenu(preset).run()
+		return app_config
+
+	def _select_authentication(self, preset: AuthenticationConfiguration | None) -> AuthenticationConfiguration | None:
+		auth_config = AuthenticationMenu(preset).run()
+		return auth_config
 
 	def _update_lang_text(self) -> None:
 		"""
@@ -288,6 +292,48 @@ class GlobalMenu(AbstractMenu[None]):
 		if item.value:
 			output = '\n'.join(sorted(item.value))
 			return output
+		return None
+
+	def _prev_authentication(self, item: MenuItem) -> str | None:
+		if item.value:
+			auth_config: AuthenticationConfiguration = item.value
+			output = ''
+
+			if auth_config.root_enc_password:
+				output += f'{tr("Root password")}: {auth_config.root_enc_password.hidden()}\n'
+
+			if auth_config.users:
+				output += FormattedOutput.as_table(auth_config.users) + '\n'
+
+			if auth_config.u2f_config:
+				u2f_config = auth_config.u2f_config
+				login_method = u2f_config.u2f_login_method.display_value()
+				output = tr('U2F login method: ') + login_method
+
+				output += '\n'
+				output += tr('Passwordless sudo: ') + (tr('Enabled') if u2f_config.passwordless_sudo else tr('Disabled'))
+
+			return output
+
+		return None
+
+	def _prev_applications(self, item: MenuItem) -> str | None:
+		if item.value:
+			app_config: ApplicationConfiguration = item.value
+			output = ''
+
+			if app_config.bluetooth_config:
+				output += f'{tr("Bluetooth")}: '
+				output += tr('Enabled') if app_config.bluetooth_config.enabled else tr('Disabled')
+				output += '\n'
+
+			if app_config.audio_config:
+				audio_config = app_config.audio_config
+				output += f'{tr("Audio")}: {audio_config.audio.value}'
+				output += '\n'
+
+			return output
+
 		return None
 
 	def _prev_tz(self, item: MenuItem) -> str | None:
@@ -345,18 +391,6 @@ class GlobalMenu(AbstractMenu[None]):
 			return f'{tr("Hostname")}: {item.value}'
 		return None
 
-	def _prev_root_pwd(self, item: MenuItem) -> str | None:
-		if item.value is not None:
-			password: Password = item.value
-			return f'{tr("Root password")}: {password.hidden()}'
-		return None
-
-	def _prev_audio(self, item: MenuItem) -> str | None:
-		if item.value is not None:
-			config: AudioConfiguration = item.value
-			return f'{tr("Audio")}: {config.audio.value}'
-		return None
-
 	def _prev_parallel_dw(self, item: MenuItem) -> str | None:
 		if item.value is not None:
 			return f'{tr("Parallel Downloads")}: {item.value}'
@@ -384,10 +418,12 @@ class GlobalMenu(AbstractMenu[None]):
 		XXX: The caller is responsible for wrapping the string with the translation
 			shim if necessary.
 		"""
-		bootloader = self._item_group.find_by_key('bootloader').value
+		bootloader: Bootloader | None = None
 		root_partition: PartitionModification | None = None
 		boot_partition: PartitionModification | None = None
 		efi_partition: PartitionModification | None = None
+
+		bootloader = self._item_group.find_by_key('bootloader').value
 
 		if disk_config := self._item_group.find_by_key('disk_config').value:
 			for layout in disk_config.device_modifications:
@@ -434,13 +470,6 @@ class GlobalMenu(AbstractMenu[None]):
 
 		return None
 
-	def _prev_users(self, item: MenuItem) -> str | None:
-		users: list[User] | None = item.value
-
-		if users:
-			return FormattedOutput.as_table(users)
-		return None
-
 	def _prev_profile(self, item: MenuItem) -> str | None:
 		profile_config: ProfileConfiguration | None = item.value
 
@@ -460,10 +489,6 @@ class GlobalMenu(AbstractMenu[None]):
 			return output
 
 		return None
-
-	def _set_root_password(self, preset: str | None = None) -> Password | None:
-		password = get_password(text=tr('Root password'), allow_skip=True)
-		return password
 
 	def _select_disk_config(
 		self,
@@ -486,7 +511,7 @@ class GlobalMenu(AbstractMenu[None]):
 
 		return bootloader
 
-	def _select_profile(self, current_profile: ProfileConfiguration | None):
+	def _select_profile(self, current_profile: ProfileConfiguration | None) -> ProfileConfiguration | None:
 		from .profile.profile_menu import ProfileMenu
 
 		profile_config = ProfileMenu(preset=current_profile).run()
@@ -506,23 +531,17 @@ class GlobalMenu(AbstractMenu[None]):
 
 		return packages
 
-	def _create_user_account(self, preset: list[User] | None = None) -> list[User]:
-		preset = [] if preset is None else preset
-		users = ask_for_additional_users(defined_users=preset)
-		return users
-
-	def _mirror_configuration(self, preset: MirrorConfiguration | None = None) -> MirrorConfiguration | None:
+	def _mirror_configuration(self, preset: MirrorConfiguration | None = None) -> MirrorConfiguration:
 		mirror_configuration = MirrorMenu(preset=preset).run()
 
-		if mirror_configuration:
-			if mirror_configuration.optional_repositories:
-				# reset the package list cache in case the repository selection has changed
-				list_available_packages.cache_clear()
+		if mirror_configuration.optional_repositories:
+			# reset the package list cache in case the repository selection has changed
+			list_available_packages.cache_clear()
 
-				# enable the repositories in the config
-				pacman_config = PacmanConfig(None)
-				pacman_config.enable(mirror_configuration.optional_repositories)
-				pacman_config.apply()
+			# enable the repositories in the config
+			pacman_config = PacmanConfig(None)
+			pacman_config.enable(mirror_configuration.optional_repositories)
+			pacman_config.apply()
 
 		return mirror_configuration
 
