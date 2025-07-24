@@ -1344,12 +1344,12 @@ class Installer:
 			info(f'Limine EFI partition: {efi_partition.dev_path}')
 
 			parent_dev_path = device_handler.get_parent_device_path(efi_partition.safe_dev_path)
-			is_target_usb = (
-				SysCommand(
-					f'udevadm info --no-pager --query=property --property=ID_BUS --value --name={parent_dev_path}',
-				).decode()
-				== 'usb'
-			)
+			is_target_usb = True # (
+			#	SysCommand(
+			#		f'udevadm info --no-pager --query=property --property=ID_BUS --value --name={parent_dev_path}',
+			#	).decode()
+			#	== 'usb'
+			# )
 
 			try:
 				efi_dir_path = self.target / efi_partition.mountpoint.relative_to('/') / 'EFI'
