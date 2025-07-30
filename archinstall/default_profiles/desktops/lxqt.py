@@ -18,10 +18,7 @@ class LxqtProfile(XorgProfile):
 			'lxqt',
 			'breeze-icons',
 			'oxygen-icons',
-			'xdg-utils',
 			'ttf-freefont',
-			'leafpad',
-			'slock',
 		]
 
 	@property
